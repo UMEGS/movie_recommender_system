@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-movies_cosine_similarity = pkl.load(open('model/movies_cosine_similarity.pkl', 'rb'))
+movies_cosine_similarity = pd.read_pickle('model/movies_cosine_similarity.pkl', compression='zip')
 movie_data = pkl.load(open('model/movie_list.pkl', 'rb'))
 
 
