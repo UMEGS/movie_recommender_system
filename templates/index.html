@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link href="../static/css/style.css" rel="stylesheet">
+
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet"/>
+
+
+    <style>
+
+        . {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        .bg-dark {
+            background-color: #c4c7c7;
+        }
+
+        .mt-50 {
+            margin-top: 2%;
+            padding: 2%;
+        }
+    </style>
+
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+    <title>Movie Recommender System</title>
+
+</head>
+<body class="bg-dark">
+<div class="container bg-white mt-50" style="height: max-content; margin: auto;">
+    <h1>Movie Recommender System</h1>
+    <div class="row">
+        <div class="col">
+            <form class="form-floating" method="POST" action={{ url_for(
+            "index") }} >
+            <div class="form-floating mb-3">
+                <select class="form-select" id="movieSelect" name="movie" aria-label="Floating label select example">
+                    <option value=''>Select Movie</option>
+                    {% for movie in movie_data %}
+                    <option value={{ movie.movie_id }}>{{ movie.title }}</option>
+                    {% endfor %}
+                </select>
+                <!--                    <label for="movieSelect">Select Movie</label>-->
+            </div>
+
+            <div class="d-grid gap-2 d-md-inline">
+                <button class="btn btn-primary" type="submit">Recommend</button>
+            </div>
+
+            </form>
+
+            {% include "recommendation_section.html" %}
+
+        </div>
+    </div>
+</div>
+
+
+<script>
+
+    $(document).ready(function () {
+        $('#movieSelect').select2();
+    });
+
+
+</script>
+
+
+<script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"
+        integrity="sha384-IQsoLXl5PILFhosVNubq5LC7Qb9DXgDA9i+tQ8Zj3iwWAwPtgFTxbJ8NT4GN1R8p"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.min.js"
+        integrity="sha384-cVKIPhGWiC2Al4u+LWgxfKTRIcfu0JTxR+EQDz/bgldoEyl4H0zUF0QKbrJ0EcQF"></script>
+
+
+</body>
+</html>

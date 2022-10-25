@@ -1,0 +1,13 @@
+<div class="mt-50 text-center row">
+    {% if recommended_movies%}
+    <h3>Recommended Movies</h3>
+    {% endif %}
+    {% for movie in recommended_movies %}
+    <a class=" col-2 movie-card" href={{ url_for('movie_detail',id=movie.movie_id) }}>
+        <figure class="figure">
+            <img src={{ movie.movie_poster }} class="bg-dark p-6 figure-img img-fluid rounded float-left pl-4" alt={{ movie[0] }}>
+            <figcaption class="figure-caption">{{ movie.name }}</figcaption>
+        </figure>
+    </a>
+    {% endfor %}
+</div>
