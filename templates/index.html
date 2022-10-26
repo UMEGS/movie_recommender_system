@@ -47,7 +47,7 @@
                 <select class="form-select" id="movieSelect" name="movie" aria-label="Floating label select example">
                     <option value=''>Select Movie</option>
                     {% for movie in movie_data %}
-                    <option value={{ movie.movie_id }}>{{ movie.title }}</option>
+                    <option value={{ movie.id }}>{{ movie.title_english }}</option>
                     {% endfor %}
                 </select>
                 <!--                    <label for="movieSelect">Select Movie</label>-->

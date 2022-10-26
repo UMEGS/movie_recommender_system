@@ -1,3 +1,4 @@
+import pickle
 import string
 import time
 
@@ -7,6 +8,7 @@ import pandas as pd
 from threading import Thread
 
 from nltk.stem.porter import PorterStemmer
+from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -89,6 +91,8 @@ def get_movie_data_range(movie_range,thread_id):
     # return movie_data
 
 
+
+
 def movie_prerossing(df):
     df = df.copy(deep=True)
     stopwords = nltk.corpus.stopwords.words('english')
@@ -100,7 +104,12 @@ def movie_prerossing(df):
         return text
 
     def get_top_3_cast(x):
-        return [value for cast in eval(x)[:3] for value in (cast['name'], cast['character_name'])]
+        return [value for cast in str_to_object(x)[:3] for value in (cast['name'], cast['character_name'])]
+
+    def str_to_object(x):
+        if type(x) == str:
+            return eval(x)
+        return x
 
     def staming(text):
         return " ".join([ps.stem(word) for word in text.split()])
@@ -109,7 +118,7 @@ def movie_prerossing(df):
     df.drop(index=df[(df.title_english.isnull()) | (df.title_english == 'None')].index, inplace=True)
 
     print('genres eval')
-    df.genres = df.genres.apply(eval)
+    df.genres = df.genres.apply(str_to_object)
 
     print('top 3 cast')
     df.cast = df.cast.apply(get_top_3_cast)
@@ -143,7 +152,23 @@ def movie_prerossing(df):
 
     return df[['id', 'title_english', 'tag']]
 
+vectorizer = pickle.load(open('vectorizer.pk','rb'))
+vectorized_tag = pickle.load(open('vectorized_tag.pk','rb'))
+movie_list = pickle.load(open('movie_list.pkl','rb'))
 
+def recommend(movie_id,top):
+    movie_guess = get_movie_details(movie_id)
+    if movie_guess.get('title_english') == 'None' or movie_guess.get('title_english') == 'Error':
+        return []
+    movie_guess = pd.DataFrame([movie_guess])
+    movie_guess = movie_prerossing(movie_guess)
+    movie_guess = vectorizer.transform(movie_guess['tag'])
+
+    similarity = cosine_similarity(vectorized_tag,movie_guess)
+    top_similarity = sorted(list(enumerate(similarity)), reverse=True, key=lambda x: x[1])[1:top+1]
+
+    top_movie_index = [i[0] for i in top_similarity]
+    return list(movie_list.iloc[top_movie_index].id.values)
 
 # if __name__ == "__main__":
 #     movie_data = get_movie_data_range(movie_id)
