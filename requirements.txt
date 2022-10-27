@@ -1,4 +1,9 @@
-streamlit
 pandas
 numpy
+pickle-mixin
 python-dotenv
+Flask
+gunicorn
+nltk
+sklearn
+

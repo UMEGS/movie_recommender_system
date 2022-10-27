@@ -3,13 +3,10 @@ import numpy as np
 import os
 import pickle as pkl
 import string
-
 import nltk
 import pandas as pd
 from flask import Flask, render_template, request
-import time
 import requests
-import streamlit as st
 from dotenv import load_dotenv
 from nltk.stem.porter import PorterStemmer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -200,7 +197,5 @@ def movie_detail(id):
 #         time.sleep(0.2)
 #     progress_bar.empty()
 
-
-
-
-
+if __name__ == '__main__':
+    app.run(debug=True,use_reloader=True)
