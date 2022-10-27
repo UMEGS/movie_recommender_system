@@ -11,11 +11,11 @@ from dotenv import load_dotenv
 from nltk.stem.porter import PorterStemmer
 from sklearn.metrics.pairwise import cosine_similarity
 
-nltk.download('stopwords')
+# nltk.download('stopwords')
 
 load_dotenv()
 
-print('listdir',os.listdir('/'))
+print('listdir',os.listdir())
 print('walk',os.walk('/'))
 
 base_url = os.getenv('YTS_BASE_URL')
