@@ -15,8 +15,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 load_dotenv()
 
-print('listdir',os.listdir())
-print('walk',os.walk('/'))
+print('listdir',os.listdir('static/model'))
+print('walk',[i for i in os.walk('static')])
 
 base_url = os.getenv('YTS_BASE_URL')
 details_url = base_url + os.getenv('YTS_DETAILS_URL')
