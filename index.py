@@ -19,15 +19,18 @@ nltk.download('stopwords')
 
 load_dotenv()
 
-movies_cosine_similarity = pd.read_pickle('model/movies_cosine_similarity.pkl', compression='zip')
+
 movie_list = pkl.load(open('model/movie_list.pkl', 'rb'))
 vectorizer = pkl.load(open('model/vectorizer.pk','rb'))
 vectorized_tag = pkl.load(open('model/vectorized_tag.pk','rb'))
 
-app = Flask(__name__)
 
 base_url = os.getenv('YTS_BASE_URL')
 details_url = base_url + os.getenv('YTS_DETAILS_URL')
+
+app = Flask(__name__)
+
+
 
 def get_movie_details(movie_id):
     params = {"movie_id": movie_id, "with_images": "true", "with_cast": "true"}
