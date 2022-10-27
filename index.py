@@ -26,7 +26,6 @@ vectorized_tag_path = os.getenv('VECTORIZED_TAG_PATH')
 vectorizer_path = os.getenv('VECTORIZER_PATH')
 
 
-
 movie_list = pd.read_pickle(movie_list_path)
 vectorizer = pd.read_pickle(vectorizer_path)
 vectorized_tag = pd.read_pickle(vectorized_tag_path)
