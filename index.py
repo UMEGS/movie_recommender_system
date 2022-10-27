@@ -26,9 +26,10 @@ vectorized_tag_path = os.getenv('VECTORIZED_TAG_PATH')
 vectorizer_path = os.getenv('VECTORIZER_PATH')
 
 
-movie_list = pkl.load(open(movie_list_path, 'rb'))
-vectorizer = pkl.load(open(vectorizer_path,'rb'))
-vectorized_tag = pkl.load(open(vectorized_tag_path,'rb'))
+
+movie_list = pd.read_pickle(movie_list_path)
+vectorizer = pd.read_pickle(vectorizer_path)
+vectorized_tag = pd.read_pickle(vectorized_tag_path)
 
 
 
