@@ -13,17 +13,24 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 nltk.download('stopwords')
 
-
 load_dotenv()
 
-
-movie_list = pkl.load(open('model/movie_list.pkl', 'rb'))
-vectorizer = pkl.load(open('model/vectorizer.pk','rb'))
-vectorized_tag = pkl.load(open('model/vectorized_tag.pk','rb'))
-
+print('listdir',os.listdir('/'))
+print('walk',os.walk('/'))
 
 base_url = os.getenv('YTS_BASE_URL')
 details_url = base_url + os.getenv('YTS_DETAILS_URL')
+
+movie_list_path = os.getenv('MOVIE_LIST_PATH')
+vectorized_tag_path = os.getenv('VECTORIZED_TAG_PATH')
+vectorizer_path = os.getenv('VECTORIZER_PATH')
+
+
+movie_list = pkl.load(open(movie_list_path, 'rb'))
+vectorizer = pkl.load(open(vectorizer_path,'rb'))
+vectorized_tag = pkl.load(open(vectorized_tag_path,'rb'))
+
+
 
 app = Flask(__name__)
 
