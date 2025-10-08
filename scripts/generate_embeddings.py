@@ -8,8 +8,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import logging
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import cpu_count
+from multiprocessing import Pool, cpu_count, Manager
 from tqdm import tqdm
 from database.db import get_db_manager
 from database.models import Movie, MovieEmbedding, Genre
@@ -18,10 +17,16 @@ import requests
 import json
 from config import OLLAMA_HOST, OLLAMA_EMBEDDING_MODEL, OLLAMA_TIMEOUT, EMBEDDING_DIMENSION
 
-# Configure logging
+# Configure logging - only to file
+log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(processName)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(processName)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(log_dir, 'generate_embeddings.log')),
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -220,11 +225,16 @@ def save_embedding(movie_id, embedding_vector):
         db_manager.close_all()
 
 
-def process_movie_batch(movie_ids):
+def process_movie_batch(args):
     """
     Process a batch of movies - generate and save embeddings
     Each process creates its own Ollama client
+
+    Args:
+        args: Tuple of (movie_ids, counter_dict) for real-time progress updates
     """
+    movie_ids, counter_dict = args
+
     # Create Ollama client for this process
     ollama_client = OllamaEmbedding()
 
@@ -238,6 +248,9 @@ def process_movie_batch(movie_ids):
                 existing = session.query(MovieEmbedding).filter_by(movie_id=movie_id).first()
                 if existing:
                     results['skipped'] += 1
+                    with counter_dict['lock']:
+                        counter_dict['skipped'] += 1
+                        counter_dict['completed'] += 1
                     db_manager.close_all()
                     continue
             db_manager.close_all()
@@ -249,14 +262,26 @@ def process_movie_batch(movie_ids):
                 # Save to database
                 if save_embedding(movie_id, embedding):
                     results['success'] += 1
+                    with counter_dict['lock']:
+                        counter_dict['success'] += 1
+                        counter_dict['completed'] += 1
                 else:
                     results['failed'] += 1
+                    with counter_dict['lock']:
+                        counter_dict['failed'] += 1
+                        counter_dict['completed'] += 1
             else:
                 results['failed'] += 1
+                with counter_dict['lock']:
+                    counter_dict['failed'] += 1
+                    counter_dict['completed'] += 1
 
         except Exception as e:
             logger.error(f"Error processing movie {movie_id}: {e}")
             results['failed'] += 1
+            with counter_dict['lock']:
+                counter_dict['failed'] += 1
+                counter_dict['completed'] += 1
 
     return results
 
@@ -298,6 +323,13 @@ def main(batch_size=None, max_workers=None, force_regenerate=False):
 
     start_time = time.time()
 
+    print("\n" + "=" * 60)
+    print("🧠 Movie Embedding Generator (Ollama)")
+    print("=" * 60)
+    print(f"🔗 Using Ollama at: {OLLAMA_HOST}")
+    print(f"🤖 Model: {OLLAMA_EMBEDDING_MODEL}")
+    print(f"📊 Embedding dimension: {EMBEDDING_DIMENSION}")
+
     logger.info("=" * 60)
     logger.info("Movie Embedding Generator Started (Ollama)")
     logger.info("=" * 60)
@@ -310,47 +342,93 @@ def main(batch_size=None, max_workers=None, force_regenerate=False):
         db_manager = get_db_manager()
         with db_manager.get_session() as session:
             movie_ids = [m.id for m in session.query(Movie.id).all()]
+        db_manager.close_all()
+        print(f"🔄 Force regenerate mode: Processing all {len(movie_ids)} movies")
         logger.info(f"Force regenerate mode: Processing all {len(movie_ids)} movies")
     else:
         movie_ids = get_movies_without_embeddings()
+        print(f"🔍 Found {len(movie_ids)} movies without embeddings")
         logger.info(f"Found {len(movie_ids)} movies without embeddings")
 
     if not movie_ids:
+        print("\n✅ All movies already have embeddings!")
         logger.info("All movies already have embeddings!")
         return
 
     # Split into batches
     batches = [movie_ids[i:i + batch_size] for i in range(0, len(movie_ids), batch_size)]
 
+    print(f"\n📊 Processing {len(movie_ids)} movies in {len(batches)} batches")
+    print(f"⚙️  Using {max_workers} parallel workers")
+    print(f"📝 Detailed logs: logs/generate_embeddings.log\n")
+
     logger.info(f"Processing {len(movie_ids)} movies in {len(batches)} batches")
     logger.info(f"Using {max_workers} parallel workers")
 
-    # Process batches in parallel
-    total_success = 0
-    total_failed = 0
-    total_skipped = 0
+    # Create shared counter for real-time progress updates
+    manager = Manager()
+    counter_dict = manager.dict()
+    counter_dict['lock'] = manager.Lock()
+    counter_dict['completed'] = 0
+    counter_dict['success'] = 0
+    counter_dict['failed'] = 0
+    counter_dict['skipped'] = 0
 
-    with tqdm(total=len(batches), desc="Generating embeddings") as pbar:
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(process_movie_batch, batch): batch for batch in batches}
+    # Prepare arguments for workers (batch + counter)
+    batch_args = [(batch, counter_dict) for batch in batches]
 
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    total_success += result['success']
-                    total_failed += result['failed']
-                    total_skipped += result['skipped']
-                    pbar.update(1)
+    with tqdm(total=len(movie_ids), desc="Generating embeddings", unit="movie",
+              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}',
+              position=0, leave=True) as pbar:
+
+        with Pool(processes=max_workers) as pool:
+            # Start async processing
+            async_result = pool.map_async(process_movie_batch, batch_args)
+
+            # Poll for progress updates
+            last_completed = 0
+            while not async_result.ready():
+                current_completed = counter_dict['completed']
+                if current_completed > last_completed:
+                    pbar.update(current_completed - last_completed)
                     pbar.set_postfix({
-                        'Success': total_success,
-                        'Skipped': total_skipped,
-                        'Failed': total_failed
+                        '✓': counter_dict['success'],
+                        '⊘': counter_dict['skipped'],
+                        '✗': counter_dict['failed']
                     })
-                except Exception as e:
-                    logger.error(f"Batch processing error: {e}")
-                    pbar.update(1)
+                    last_completed = current_completed
+                time.sleep(0.1)  # Check every 100ms
+
+            # Final update
+            current_completed = counter_dict['completed']
+            if current_completed > last_completed:
+                pbar.update(current_completed - last_completed)
+                pbar.set_postfix({
+                    '✓': counter_dict['success'],
+                    '⊘': counter_dict['skipped'],
+                    '✗': counter_dict['failed']
+                })
+
+            # Get final results
+            async_result.get()
+
+    total_success = counter_dict['success']
+    total_failed = counter_dict['failed']
+    total_skipped = counter_dict['skipped']
 
     elapsed_time = time.time() - start_time
+
+    print("\n" + "=" * 60)
+    print("✅ Movie Embedding Generator Completed")
+    print("=" * 60)
+    print(f"📊 Total movies processed: {total_success + total_failed + total_skipped}")
+    print(f"   ✓  Successfully generated: {total_success}")
+    print(f"   ⊘  Skipped (already exist): {total_skipped}")
+    print(f"   ✗  Failed: {total_failed}")
+    print(f"⏱️  Time elapsed: {elapsed_time:.2f} seconds")
+    if total_success > 0:
+        print(f"⚡ Average speed: {total_success / elapsed_time:.2f} embeddings/second")
+    print("=" * 60 + "\n")
 
     logger.info("=" * 60)
     logger.info("Movie Embedding Generator Completed")

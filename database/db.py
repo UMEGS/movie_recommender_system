@@ -62,6 +62,23 @@ class DatabaseManager:
         """Check if a movie already exists by external_id"""
         with self.get_session() as session:
             return session.query(Movie).filter_by(external_id=external_id).first() is not None
+
+    def get_existing_movie_ids(self, external_ids):
+        """
+        Batch check which movies already exist in database
+        Returns set of external_ids that already exist
+
+        Args:
+            external_ids: List of external movie IDs to check
+
+        Returns:
+            Set of external_ids that exist in database
+        """
+        with self.get_session() as session:
+            existing = session.query(Movie.external_id).filter(
+                Movie.external_id.in_(external_ids)
+            ).all()
+            return set(row[0] for row in existing)
     
     def get_or_create_genre(self, session, genre_name):
         """Get existing genre or create new one (handles race conditions)"""

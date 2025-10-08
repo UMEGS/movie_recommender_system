@@ -8,7 +8,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from database.db import get_db_manager
-from database.models import Movie, Genre, Cast, Torrent, MovieGenre
+from database.models import Movie, Genre, Cast, Torrent, MovieGenre, MovieEmbedding
 from sqlalchemy import func, desc
 import time
 from datetime import datetime, timedelta
@@ -42,6 +42,10 @@ def get_stats():
 
             # Total torrents
             stats['total_torrents'] = session.query(Torrent).count()
+
+            # Embedding statistics
+            stats['total_embeddings'] = session.query(MovieEmbedding).count()
+            stats['movies_without_embeddings'] = stats['total_movies'] - stats['total_embeddings']
 
             # Recently added movies (last 5 minutes)
             five_minutes_ago = datetime.now() - timedelta(minutes=5)
@@ -102,10 +106,17 @@ def display_stats(stats):
     print(f"Total Cast Members:        {stats['total_cast']:,}")
     print(f"Total Torrents:            {stats['total_torrents']:,}")
     print(f"Movies Added (Last 5 min): {stats['recent_movies']:,}")
-    
+
+    print("\n🧠 EMBEDDING STATISTICS")
+    print("-" * 70)
+    print(f"Movies with Embeddings:    {stats['total_embeddings']:,}")
+    print(f"Movies without Embeddings: {stats['movies_without_embeddings']:,}")
+
     if stats['total_movies'] > 0:
         completion = (stats['movies_with_details'] / stats['total_movies']) * 100
-        print(f"\nCompletion Rate:           {completion:.1f}%")
+        embedding_completion = (stats['total_embeddings'] / stats['total_movies']) * 100
+        print(f"\nData Completion Rate:      {completion:.1f}%")
+        print(f"Embedding Completion Rate: {embedding_completion:.1f}%")
     
     print("\n🎭 TOP 5 GENRES")
     print("-" * 70)

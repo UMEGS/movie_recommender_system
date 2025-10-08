@@ -8,42 +8,25 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import requests
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import cpu_count, Manager
+from multiprocessing import Pool, cpu_count, Manager
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import logging
 from tqdm import tqdm
 from database.db import get_db_manager
 
-# Configure logging - only show INFO for main process, WARNING for workers
-def setup_logging():
-    """Setup logging with file output for workers"""
-    # Create logs directory if it doesn't exist
-    log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
-    os.makedirs(log_dir, exist_ok=True)
+# Configure logging
+log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+os.makedirs(log_dir, exist_ok=True)
 
-    # File handler for all logs
-    file_handler = logging.FileHandler(os.path.join(log_dir, 'fetch_yts_data.log'))
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(processName)s - %(levelname)s - %(message)s'))
-
-    # Console handler - only for main process
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter('%(message)s'))
-
-    # Root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-    root_logger.addHandler(file_handler)
-
-    # Only add console handler to main process
-    if os.getpid() == os.getppid() or 'MainProcess' in str(os.getpid()):
-        root_logger.addHandler(console_handler)
-
-    return logging.getLogger(__name__)
-
-logger = setup_logging()
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(processName)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(log_dir, 'fetch_yts_data.log')),
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # API Configuration
 BASE_URL = "https://yts.mx/api/v2"
@@ -97,24 +80,21 @@ def fetch_movie_details(movie_id, imdb_code=None):
         return None
 
 
-def process_movie_batch(movie_ids_batch):
+def process_movie_batch(args):
     """
     Process a batch of movie IDs - fetch details and save to DB using ORM
     Each process creates its own database manager instance
+
+    Args:
+        args: Tuple of (movie_ids_batch, counter_dict) for real-time progress updates
     """
+    movie_ids_batch, counter_dict = args
+
     import os
     import logging
 
-    # Setup logging for worker process - only to file
-    process_logger = logging.getLogger(f"Worker-{os.getpid()}")
-    process_logger.setLevel(logging.DEBUG)
-
-    # Remove any console handlers for worker processes
-    for handler in process_logger.handlers[:]:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-            process_logger.removeHandler(handler)
-
     process_name = f"Worker-{os.getpid()}"
+    process_logger = logging.getLogger(__name__)
     results = {'success': 0, 'failed': 0, 'skipped': 0}
 
     # Create database manager for this process
@@ -126,12 +106,6 @@ def process_movie_batch(movie_ids_batch):
 
         for idx, movie_id in enumerate(movie_ids_batch, 1):
             try:
-                # Check if movie already exists (skip if it does)
-                if db_manager.movie_exists(movie_id):
-                    results['skipped'] += 1
-                    process_logger.debug(f"{process_name}: Movie {movie_id} already exists, skipping...")
-                    continue
-
                 # Fetch detailed movie data
                 movie_data = fetch_movie_details(movie_id)
 
@@ -141,15 +115,29 @@ def process_movie_batch(movie_ids_batch):
 
                     if success:
                         if message == "already_exists":
+                            # Race condition - another worker saved it first
                             results['skipped'] += 1
+                            with counter_dict['lock']:
+                                counter_dict['skipped'] += 1
+                                counter_dict['completed'] += 1
+                            process_logger.debug(f"{process_name}: Movie {movie_id} saved by another worker")
                         else:
                             results['success'] += 1
+                            with counter_dict['lock']:
+                                counter_dict['success'] += 1
+                                counter_dict['completed'] += 1
                             process_logger.info(f"{process_name}: ✓ Saved movie {movie_id}: {movie_data.get('title', 'Unknown')} ({idx}/{batch_size})")
                     else:
                         results['failed'] += 1
+                        with counter_dict['lock']:
+                            counter_dict['failed'] += 1
+                            counter_dict['completed'] += 1
                         process_logger.error(f"{process_name}: Failed to save movie {movie_id}: {message}")
                 else:
                     results['failed'] += 1
+                    with counter_dict['lock']:
+                        counter_dict['failed'] += 1
+                        counter_dict['completed'] += 1
                     process_logger.warning(f"{process_name}: No data returned for movie {movie_id}")
 
                 # Small delay to avoid rate limiting
@@ -158,6 +146,9 @@ def process_movie_batch(movie_ids_batch):
             except Exception as e:
                 process_logger.error(f"{process_name}: Error processing movie {movie_id}: {e}")
                 results['failed'] += 1
+                with counter_dict['lock']:
+                    counter_dict['failed'] += 1
+                    counter_dict['completed'] += 1
 
         process_logger.info(f"{process_name}: Batch complete - Success: {results['success']}, Skipped: {results['skipped']}, Failed: {results['failed']}")
 
@@ -223,8 +214,6 @@ def collect_all_movie_ids(max_pages=None, parallel_pages=10):
 
     # Fetch pages in parallel batches
     with tqdm(total=len(pages_to_fetch), desc="Collecting movie IDs", position=0, leave=True) as pbar:
-        from concurrent.futures import ThreadPoolExecutor
-
         with ThreadPoolExecutor(max_workers=parallel_pages) as executor:
             # Submit all pages
             future_to_page = {
@@ -273,59 +262,97 @@ def main(max_pages=None, batch_size=20, max_workers=None, parallel_pages=20):
         print("❌ No movie IDs collected. Exiting.")
         return
 
-    # Split into batches
-    batches = [movie_ids[i:i + batch_size] for i in range(0, len(movie_ids), batch_size)]
+    # Check which movies already exist in database (batch check - much faster!)
+    print(f"🔍 Checking which movies already exist in database...")
+    db_manager = get_db_manager()
+    existing_ids = db_manager.get_existing_movie_ids(movie_ids)
+    db_manager.close_all()
 
-    print(f"\n📊 Processing {len(movie_ids):,} movies in {len(batches)} batches")
+    # Filter out existing movies
+    new_movie_ids = [mid for mid in movie_ids if mid not in existing_ids]
+
+    print(f"✓ Found {len(existing_ids):,} existing movies")
+    print(f"📥 Need to fetch {len(new_movie_ids):,} new movies")
+
+    if not new_movie_ids:
+        print("\n✅ All movies are already in the database! Nothing to fetch.")
+        return
+
+    # Split into batches
+    batches = [new_movie_ids[i:i + batch_size] for i in range(0, len(new_movie_ids), batch_size)]
+
+    print(f"\n📊 Processing {len(new_movie_ids):,} movies in {len(batches)} batches")
 
     # Determine number of workers
     if max_workers is None:
         max_workers = min(cpu_count() * 2, len(batches))
 
     print(f"⚙️  Using {max_workers} parallel workers")
-    print(f"⏱️  Estimated time: {(len(movie_ids) * 0.15 / max_workers / 60):.1f} minutes")
+    print(f"⏱️  Estimated time: {(len(new_movie_ids) * 0.15 / max_workers / 60):.1f} minutes")
     print(f"📝 Detailed logs: logs/fetch_yts_data.log\n")
 
-    # Process batches in parallel
-    total_success = 0
-    total_failed = 0
-    total_skipped = 0
+    # Create shared counter for real-time progress updates
+    manager = Manager()
+    counter_dict = manager.dict()
+    counter_dict['lock'] = manager.Lock()
+    counter_dict['completed'] = 0
+    counter_dict['success'] = 0
+    counter_dict['failed'] = 0
+    counter_dict['skipped'] = 0
 
-    with tqdm(total=len(movie_ids), desc="Fetching movies", unit="movie",
+    # Prepare arguments for workers (batch + counter)
+    batch_args = [(batch, counter_dict) for batch in batches]
+
+    with tqdm(total=len(new_movie_ids), desc="Fetching movies", unit="movie",
               bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}',
               position=0, leave=True) as pbar:
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(process_movie_batch, batch): batch for batch in batches}
 
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    total_success += result['success']
-                    total_failed += result['failed']
-                    total_skipped += result['skipped']
+        with Pool(processes=max_workers) as pool:
+            # Start async processing
+            async_result = pool.map_async(process_movie_batch, batch_args)
 
-                    # Update progress by the number of movies in this batch
-                    batch_size_completed = result['success'] + result['failed'] + result['skipped']
-                    pbar.update(batch_size_completed)
+            # Poll for progress updates
+            last_completed = 0
+            while not async_result.ready():
+                current_completed = counter_dict['completed']
+                if current_completed > last_completed:
+                    pbar.update(current_completed - last_completed)
                     pbar.set_postfix({
-                        '✓': total_success,
-                        '⊘': total_skipped,
-                        '✗': total_failed
+                        '✓': counter_dict['success'],
+                        '⊘': counter_dict['skipped'],
+                        '✗': counter_dict['failed']
                     })
-                except Exception as e:
-                    logger.error(f"Batch processing error: {e}")
-                    # Still update progress even on error
-                    pbar.update(batch_size)
+                    last_completed = current_completed
+                time.sleep(0.1)  # Check every 100ms
+
+            # Final update
+            current_completed = counter_dict['completed']
+            if current_completed > last_completed:
+                pbar.update(current_completed - last_completed)
+                pbar.set_postfix({
+                    '✓': counter_dict['success'],
+                    '⊘': counter_dict['skipped'],
+                    '✗': counter_dict['failed']
+                })
+
+            # Get final results
+            async_result.get()
+
+    total_success = counter_dict['success']
+    total_failed = counter_dict['failed']
+    total_skipped = counter_dict['skipped']
 
     elapsed_time = time.time() - start_time
 
     print("\n" + "=" * 60)
     print("✅ YTS Movie Data Fetcher Completed")
     print("=" * 60)
-    print(f"📊 Total movies processed: {total_success + total_failed + total_skipped:,}")
-    print(f"✓  Successfully saved: {total_success:,}")
-    print(f"⊘  Skipped (already exist): {total_skipped:,}")
-    print(f"✗  Failed: {total_failed:,}")
+    print(f"📊 Total movies checked: {len(movie_ids):,}")
+    print(f"💾 Already in database: {len(existing_ids):,}")
+    print(f"📥 Attempted to fetch: {len(new_movie_ids):,}")
+    print(f"   ✓  Successfully saved: {total_success:,}")
+    print(f"   ⊘  Skipped (race condition): {total_skipped:,}")
+    print(f"   ✗  Failed: {total_failed:,}")
     print(f"⏱️  Time elapsed: {elapsed_time:.2f} seconds")
     if (total_success + total_failed) > 0:
         print(f"⚡ Average speed: {(total_success + total_failed) / elapsed_time:.2f} movies/second")
