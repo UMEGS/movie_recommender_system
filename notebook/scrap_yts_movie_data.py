@@ -1,21 +1,21 @@
 import pickle
 import string
 import time
+from multiprocessing import Process, Manager, cpu_count
+from functools import partial
 
 import nltk
 import requests
 import pandas as pd
-from threading import Thread
 
 from nltk.stem.porter import PorterStemmer
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 base_url = "https://yts.mx/api"
 details_url = base_url + "/v2/movie_details.json"
-movie_data = []
 total_movie_id = 45954
 
 
@@ -82,13 +82,17 @@ def get_movie_details(movie_id):
 
 
 
-def get_movie_data_range(movie_range,thread_id):
+def get_movie_data_range(movie_range):
+    """
+    Fetch movie details for a range of movie IDs.
+    Returns a list of movie dictionaries.
+    """
+    results = []
     for movie_id in movie_range:
         movie = get_movie_details(movie_id)
         if movie:
-            movie_data.append(movie)
-            # print("Movie Data Saved: {} Movie ID: {} Thread: {} ".format(len(movie_data),movie["id"],thread_id))
-    # return movie_data
+            results.append(movie)
+    return results
 
 
 
@@ -176,43 +180,47 @@ def recommend(movie_id,top):
 #     df.to_excel("movies.xlsx", index=False)
 #     print("Movie Data Saved")
 
-def check_completed():
-    return len(movie_data) > total_movie_id
-
-def pbar_function(pbar):
-    while not check_completed():
-        # print("Movie Data Saved: {}".format(len(movie_data)))
-        # pbar.reset(total=None)
-        pbar.n = len(movie_data)
-        pbar.refresh()
-        time.sleep(0.5)
-
 if __name__ == "__main__":
-    # use multithreading to get movie data
+    # Use multiprocessing to get movie data - much faster than multithreading
     start = 1
     end = 46000
-    step = 4000
-    threads = []
-    pbar = tqdm(total=total_movie_id)
-    pbar_thread = Thread(target=pbar_function, args=(pbar,))
-    pbar_thread.start()
+    step = 500  # Smaller chunks for better load balancing
 
-    for i in range(start, end, step):
-        thread = Thread(target=get_movie_data_range, args=(range(i, i + step), i))
-        thread.start()
-        threads.append(thread)
+    # Create ranges for parallel processing
+    ranges = [range(i, min(i + step, end)) for i in range(start, end, step)]
 
-    for thread in threads:
-        thread.join()
+    # Use ProcessPoolExecutor for better performance
+    # max_workers defaults to number of CPUs, but you can adjust
+    max_workers = min(cpu_count() * 2, len(ranges))  # Use 2x CPU count for I/O-bound tasks
 
-    # pbar_thread = Thread(target=pbar_function, args=(pbar,))
-    pbar_thread.join()
-    pbar.close()
+    print(f"Starting download with {max_workers} workers for {len(ranges)} chunks...")
+    print(f"Total movies to fetch: {end - start}")
 
+    movie_data = []
 
-    # movie_data = [movie for movie_list in movie_data for movie in movie_list]
+    with tqdm(total=len(ranges), desc="Downloading movie data") as pbar:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            futures = {executor.submit(get_movie_data_range, movie_range): movie_range
+                      for movie_range in ranges}
+
+            # Process completed tasks as they finish
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    movie_data.extend(result)
+                    pbar.update(1)
+                    pbar.set_postfix({"Movies fetched": len(movie_data)})
+                except Exception as e:
+                    print(f"Error processing range: {e}")
+                    pbar.update(1)
+
+    print(f"\nTotal movies fetched: {len(movie_data)}")
+
+    # Save to Excel
     df = pd.DataFrame(movie_data)
     df.to_excel("movies.xlsx", index=False)
+    print("Movie data saved to movies.xlsx")
 
 
 

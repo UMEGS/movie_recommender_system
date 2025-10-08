@@ -7,4 +7,10 @@ Flask
 gunicorn
 nltk
 sklearn
+Flask-SQLAlchemy
+psycopg2-binary
+sqlalchemy-pgvector
+sqlalchemy
+pgvector
+tqdm
 
