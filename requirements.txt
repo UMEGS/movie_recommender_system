@@ -2,11 +2,11 @@ pandas
 requests
 numpy
 python-dotenv
-Flask
-gunicorn
-Flask-SQLAlchemy
 psycopg2-binary
 sqlalchemy
 pgvector
 tqdm
+fastapi
+uvicorn[standard]
+pydantic
 

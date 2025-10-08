@@ -122,6 +122,28 @@ movie_recommender_system/
 
 ## 🎯 Usage Examples
 
+### REST API
+
+Start the FastAPI server:
+```bash
+./api/run.sh
+# or
+uvicorn api.main:app --reload
+```
+
+Access the interactive documentation at http://localhost:8000/docs
+
+```bash
+# Get recommendations
+curl "http://localhost:8000/api/recommendations/movie/1?limit=5"
+
+# Search movies
+curl "http://localhost:8000/api/search?query=action&limit=10"
+
+# Get trending movies
+curl "http://localhost:8000/api/trending?limit=10"
+```
+
 ### Python API
 
 ```python
@@ -276,7 +298,7 @@ python scripts/generate_embeddings.py --workers 4 --batch-size 50
 - **PostgreSQL** with **pgvector** extension
 - **Ollama** with **nomic-embed-text** model
 - **SQLAlchemy** ORM
-- **Flask** (for web API)
+- **FastAPI** (for REST API)
 - **Multiprocessing** for parallel processing
 
 ## 📝 License
