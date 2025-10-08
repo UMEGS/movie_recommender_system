@@ -1,15 +1,11 @@
 pandas
 requests
 numpy
-pickle-mixin
 python-dotenv
 Flask
 gunicorn
-nltk
-sklearn
 Flask-SQLAlchemy
 psycopg2-binary
-sqlalchemy-pgvector
 sqlalchemy
 pgvector
 tqdm
