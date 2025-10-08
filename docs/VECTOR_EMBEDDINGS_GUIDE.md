@@ -164,7 +164,7 @@ Average speed: 4.81 embeddings/second
 ### Python API
 
 ```python
-from recommendation_engine import MovieRecommendationEngine
+from scripts.recommendation_engine import MovieRecommendationEngine
 
 # Initialize engine
 engine = MovieRecommendationEngine()
@@ -434,7 +434,7 @@ python generate_embeddings.py
 
 ```python
 from flask import Flask, jsonify, request
-from recommendation_engine import MovieRecommendationEngine
+from scripts.recommendation_engine import MovieRecommendationEngine
 
 app = Flask(__name__)
 engine = MovieRecommendationEngine()

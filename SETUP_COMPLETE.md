@@ -171,7 +171,7 @@ EMBEDDING_BATCH_SIZE=100
 ## 📚 Python API Example
 
 ```python
-from recommendation_engine import MovieRecommendationEngine
+from scripts.recommendation_engine import MovieRecommendationEngine
 
 engine = MovieRecommendationEngine()
 

@@ -125,7 +125,7 @@ movie_recommender_system/
 ### Python API
 
 ```python
-from recommendation_engine import MovieRecommendationEngine
+from scripts.recommendation_engine import MovieRecommendationEngine
 
 engine = MovieRecommendationEngine()
 

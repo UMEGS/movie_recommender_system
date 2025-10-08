@@ -2,7 +2,7 @@
 Database connection and session management using SQLAlchemy ORM
 All database operations should go through this module
 """
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
@@ -12,6 +12,14 @@ from database.models import Base, Movie, Genre, Cast, Torrent, MovieGenre, Movie
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Register pgvector types with psycopg2
+try:
+    from pgvector.psycopg2 import register_vector
+    _has_pgvector = True
+except ImportError:
+    logger.warning("pgvector.psycopg2 not available - vector operations may not work")
+    _has_pgvector = False
 
 
 class DatabaseManager:
@@ -31,11 +39,18 @@ class DatabaseManager:
             pool_pre_ping=True,  # Verify connections before using
             echo=False  # Set to True for SQL debugging
         )
-        
+
+        # Register pgvector type on each new connection
+        if _has_pgvector:
+            @event.listens_for(self.engine, "connect")
+            def receive_connect(dbapi_conn, connection_record):
+                register_vector(dbapi_conn)
+                logger.debug("Registered pgvector types for new connection")
+
         # Create session factory
         self.session_factory = sessionmaker(bind=self.engine)
         self.Session = scoped_session(self.session_factory)
-        
+
         logger.info(f"Database engine created (pool_size={pool_size}, max_overflow={max_overflow})")
     
     @contextmanager
