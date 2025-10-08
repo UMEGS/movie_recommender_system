@@ -2,6 +2,11 @@
 Generate embeddings for movies and store in PostgreSQL vector database
 Uses Ollama with nomic-embed-text model for generating embeddings
 """
+import sys
+import os
+# Add parent directory to path so we can import database module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count

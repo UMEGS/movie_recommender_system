@@ -2,11 +2,15 @@
 Monitor the progress of data fetching in real-time
 Shows statistics from the database using ORM
 """
+import sys
+import os
+# Add parent directory to path so we can import database module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from database.db import get_db_manager
 from database.models import Movie, Genre, Cast, Torrent, MovieGenre
 from sqlalchemy import func, desc
 import time
-import os
 from datetime import datetime, timedelta
 
 def clear_screen():

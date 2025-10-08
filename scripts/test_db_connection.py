@@ -1,6 +1,11 @@
 """
 Test database connection and verify tables exist using ORM
 """
+import sys
+import os
+# Add parent directory to path so we can import database module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from database.db import get_db_manager
 from sqlalchemy import inspect
 

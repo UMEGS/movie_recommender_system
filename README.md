@@ -53,14 +53,17 @@ OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 ### 4. Test Setup
 
 ```bash
-# Test database and Ollama connections
+# Test database connection
+python scripts/test_db_connection.py
+
+# Test Ollama connection
 python scripts/test_ollama_connection.py
 ```
 
 ### 5. Fetch Movie Data
 
 ```bash
-# Fetch movies from YTS API
+# Fetch movies from YTS API (run from project root)
 python scripts/fetch_yts_data.py --max-pages 100 --workers 16
 
 # Monitor progress (in another terminal)
@@ -70,14 +73,14 @@ python scripts/monitor_progress.py
 ### 6. Generate Embeddings
 
 ```bash
-# Generate embeddings for all movies
+# Generate embeddings for all movies (run from project root)
 python scripts/generate_embeddings.py
 ```
 
 ### 7. Get Recommendations
 
 ```bash
-# Get recommendations for a movie
+# Get recommendations for a movie (run from project root)
 python recommendation_engine.py --movie-id 123 --limit 10
 
 # Search movies by text

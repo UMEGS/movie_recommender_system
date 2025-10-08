@@ -2,6 +2,11 @@
 YTS Movie Data Fetcher with Multiprocessing
 Fetches movie data from YTS API and stores in PostgreSQL database using ORM
 """
+import sys
+import os
+# Add parent directory to path so we can import database module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import requests
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count

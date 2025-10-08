@@ -2,6 +2,11 @@
 Test Ollama connection and embedding generation
 Run this before generating embeddings for all movies
 """
+import sys
+import os
+# Add parent directory to path so we can import modules
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import requests
 import json
 from config import OLLAMA_HOST, OLLAMA_EMBEDDING_MODEL, OLLAMA_TIMEOUT
