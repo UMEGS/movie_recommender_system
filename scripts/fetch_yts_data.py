@@ -9,18 +9,41 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import requests
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, Manager
 import time
 import logging
 from tqdm import tqdm
 from database.db import get_db_manager
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(processName)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Configure logging - only show INFO for main process, WARNING for workers
+def setup_logging():
+    """Setup logging with file output for workers"""
+    # Create logs directory if it doesn't exist
+    log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+
+    # File handler for all logs
+    file_handler = logging.FileHandler(os.path.join(log_dir, 'fetch_yts_data.log'))
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(processName)s - %(levelname)s - %(message)s'))
+
+    # Console handler - only for main process
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter('%(message)s'))
+
+    # Root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(file_handler)
+
+    # Only add console handler to main process
+    if os.getpid() == os.getppid() or 'MainProcess' in str(os.getpid()):
+        root_logger.addHandler(console_handler)
+
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
 
 # API Configuration
 BASE_URL = "https://yts.mx/api/v2"
@@ -80,6 +103,17 @@ def process_movie_batch(movie_ids_batch):
     Each process creates its own database manager instance
     """
     import os
+    import logging
+
+    # Setup logging for worker process - only to file
+    process_logger = logging.getLogger(f"Worker-{os.getpid()}")
+    process_logger.setLevel(logging.DEBUG)
+
+    # Remove any console handlers for worker processes
+    for handler in process_logger.handlers[:]:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            process_logger.removeHandler(handler)
+
     process_name = f"Worker-{os.getpid()}"
     results = {'success': 0, 'failed': 0, 'skipped': 0}
 
@@ -88,14 +122,14 @@ def process_movie_batch(movie_ids_batch):
 
     try:
         batch_size = len(movie_ids_batch)
-        logger.info(f"{process_name}: Processing batch of {batch_size} movies (IDs: {movie_ids_batch[0]}-{movie_ids_batch[-1]})")
+        process_logger.debug(f"{process_name}: Processing batch of {batch_size} movies (IDs: {movie_ids_batch[0]}-{movie_ids_batch[-1]})")
 
         for idx, movie_id in enumerate(movie_ids_batch, 1):
             try:
                 # Check if movie already exists (skip if it does)
                 if db_manager.movie_exists(movie_id):
                     results['skipped'] += 1
-                    logger.debug(f"{process_name}: Movie {movie_id} already exists, skipping...")
+                    process_logger.debug(f"{process_name}: Movie {movie_id} already exists, skipping...")
                     continue
 
                 # Fetch detailed movie data
@@ -110,22 +144,22 @@ def process_movie_batch(movie_ids_batch):
                             results['skipped'] += 1
                         else:
                             results['success'] += 1
-                            logger.info(f"{process_name}: ✓ Saved movie {movie_id}: {movie_data.get('title', 'Unknown')} ({idx}/{batch_size})")
+                            process_logger.info(f"{process_name}: ✓ Saved movie {movie_id}: {movie_data.get('title', 'Unknown')} ({idx}/{batch_size})")
                     else:
                         results['failed'] += 1
-                        logger.error(f"{process_name}: Failed to save movie {movie_id}: {message}")
+                        process_logger.error(f"{process_name}: Failed to save movie {movie_id}: {message}")
                 else:
                     results['failed'] += 1
-                    logger.warning(f"{process_name}: No data returned for movie {movie_id}")
+                    process_logger.warning(f"{process_name}: No data returned for movie {movie_id}")
 
                 # Small delay to avoid rate limiting
                 time.sleep(0.1)
 
             except Exception as e:
-                logger.error(f"{process_name}: Error processing movie {movie_id}: {e}")
+                process_logger.error(f"{process_name}: Error processing movie {movie_id}: {e}")
                 results['failed'] += 1
 
-        logger.info(f"{process_name}: Batch complete - Success: {results['success']}, Skipped: {results['skipped']}, Failed: {results['failed']}")
+        process_logger.info(f"{process_name}: Batch complete - Success: {results['success']}, Skipped: {results['skipped']}, Failed: {results['failed']}")
 
     finally:
         # Clean up database connections for this process
@@ -169,20 +203,18 @@ def collect_all_movie_ids(max_pages=None, parallel_pages=10):
         max_pages: Maximum number of pages to fetch (None = all)
         parallel_pages: Number of pages to fetch in parallel (default: 10)
     """
-    logger.info("Collecting all movie IDs from YTS API...")
-
     limit = 50
 
     # Get total count
     total_count = get_total_movie_count()
-    logger.info(f"Total movies available: {total_count:,}")
+    print(f"📚 Total movies available: {total_count:,}")
 
     if max_pages:
         total_pages = max_pages
     else:
         total_pages = (total_count // limit) + 1
 
-    logger.info(f"Fetching {total_pages} pages with {parallel_pages} parallel requests...")
+    print(f"🔍 Collecting movie IDs from {total_pages} pages...")
 
     all_movie_ids = []
 
@@ -190,7 +222,7 @@ def collect_all_movie_ids(max_pages=None, parallel_pages=10):
     pages_to_fetch = list(range(1, total_pages + 1))
 
     # Fetch pages in parallel batches
-    with tqdm(total=len(pages_to_fetch), desc="Collecting movie IDs") as pbar:
+    with tqdm(total=len(pages_to_fetch), desc="Collecting movie IDs", position=0, leave=True) as pbar:
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=parallel_pages) as executor:
@@ -214,7 +246,7 @@ def collect_all_movie_ids(max_pages=None, parallel_pages=10):
     # Sort by ID to maintain order
     all_movie_ids.sort()
 
-    logger.info(f"Collected {len(all_movie_ids):,} movie IDs")
+    print(f"✓ Collected {len(all_movie_ids):,} movie IDs\n")
     return all_movie_ids
 
 
@@ -230,40 +262,38 @@ def main(max_pages=None, batch_size=20, max_workers=None, parallel_pages=20):
     """
     start_time = time.time()
 
-    logger.info("=" * 60)
-    logger.info("YTS Movie Data Fetcher Started")
-    logger.info("=" * 60)
+    print("\n" + "=" * 60)
+    print("🎬 YTS Movie Data Fetcher")
+    print("=" * 60)
 
     # Collect all movie IDs (now in parallel!)
     movie_ids = collect_all_movie_ids(max_pages=max_pages, parallel_pages=parallel_pages)
 
     if not movie_ids:
-        logger.error("No movie IDs collected. Exiting.")
+        print("❌ No movie IDs collected. Exiting.")
         return
 
     # Split into batches
     batches = [movie_ids[i:i + batch_size] for i in range(0, len(movie_ids), batch_size)]
 
-    logger.info(f"Processing {len(movie_ids):,} movies in {len(batches)} batches (batch size: {batch_size})")
+    print(f"\n📊 Processing {len(movie_ids):,} movies in {len(batches)} batches")
 
     # Determine number of workers
     if max_workers is None:
         max_workers = min(cpu_count() * 2, len(batches))
 
-    logger.info(f"Using {max_workers} parallel workers")
-    logger.info(f"Estimated time: {(len(movie_ids) * 0.15 / max_workers / 60):.1f} minutes")
+    print(f"⚙️  Using {max_workers} parallel workers")
+    print(f"⏱️  Estimated time: {(len(movie_ids) * 0.15 / max_workers / 60):.1f} minutes")
+    print(f"📝 Detailed logs: logs/fetch_yts_data.log\n")
 
     # Process batches in parallel
     total_success = 0
     total_failed = 0
     total_skipped = 0
 
-    print("\n" + "=" * 60)
-    print("Starting movie data fetching...")
-    print("Watch the logs above for real-time progress from each worker")
-    print("=" * 60 + "\n")
-
-    with tqdm(total=len(batches), desc="Processing batches", unit="batch") as pbar:
+    with tqdm(total=len(movie_ids), desc="Fetching movies", unit="movie",
+              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}',
+              position=0, leave=True) as pbar:
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(process_movie_batch, batch): batch for batch in batches}
 
@@ -273,28 +303,33 @@ def main(max_pages=None, batch_size=20, max_workers=None, parallel_pages=20):
                     total_success += result['success']
                     total_failed += result['failed']
                     total_skipped += result['skipped']
-                    pbar.update(1)
+
+                    # Update progress by the number of movies in this batch
+                    batch_size_completed = result['success'] + result['failed'] + result['skipped']
+                    pbar.update(batch_size_completed)
                     pbar.set_postfix({
-                        'Success': total_success,
-                        'Skipped': total_skipped,
-                        'Failed': total_failed
+                        '✓': total_success,
+                        '⊘': total_skipped,
+                        '✗': total_failed
                     })
                 except Exception as e:
                     logger.error(f"Batch processing error: {e}")
-                    pbar.update(1)
+                    # Still update progress even on error
+                    pbar.update(batch_size)
 
     elapsed_time = time.time() - start_time
 
-    logger.info("=" * 60)
-    logger.info("YTS Movie Data Fetcher Completed")
-    logger.info(f"Total movies processed: {total_success + total_failed + total_skipped}")
-    logger.info(f"Successfully saved: {total_success}")
-    logger.info(f"Skipped (already exist): {total_skipped}")
-    logger.info(f"Failed: {total_failed}")
-    logger.info(f"Time elapsed: {elapsed_time:.2f} seconds")
+    print("\n" + "=" * 60)
+    print("✅ YTS Movie Data Fetcher Completed")
+    print("=" * 60)
+    print(f"📊 Total movies processed: {total_success + total_failed + total_skipped:,}")
+    print(f"✓  Successfully saved: {total_success:,}")
+    print(f"⊘  Skipped (already exist): {total_skipped:,}")
+    print(f"✗  Failed: {total_failed:,}")
+    print(f"⏱️  Time elapsed: {elapsed_time:.2f} seconds")
     if (total_success + total_failed) > 0:
-        logger.info(f"Average speed: {(total_success + total_failed) / elapsed_time:.2f} movies/second")
-    logger.info("=" * 60)
+        print(f"⚡ Average speed: {(total_success + total_failed) / elapsed_time:.2f} movies/second")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
