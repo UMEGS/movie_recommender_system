@@ -64,23 +64,48 @@ class DatabaseManager:
             return session.query(Movie).filter_by(external_id=external_id).first() is not None
     
     def get_or_create_genre(self, session, genre_name):
-        """Get existing genre or create new one"""
+        """Get existing genre or create new one (handles race conditions)"""
+        from sqlalchemy.exc import IntegrityError
+
+        # First try to get existing
         genre = session.query(Genre).filter_by(name=genre_name).first()
-        if not genre:
+        if genre:
+            return genre
+
+        # Try to create new one with savepoint
+        savepoint = session.begin_nested()
+        try:
             genre = Genre(name=genre_name)
             session.add(genre)
             session.flush()  # Get the ID without committing
-        return genre
+            savepoint.commit()
+            return genre
+        except IntegrityError:
+            # If unique constraint violation, another process created it
+            # Rollback only to savepoint, not the whole transaction
+            savepoint.rollback()
+            genre = session.query(Genre).filter_by(name=genre_name).first()
+            if genre:
+                return genre
+            # If still not found, re-raise the error
+            raise
     
     def get_or_create_cast(self, session, cast_data):
-        """Get existing cast member or create new one"""
+        """Get existing cast member or create new one (handles race conditions)"""
+        from sqlalchemy.exc import IntegrityError
+
         # Try to find by name and imdb_code
         cast = session.query(Cast).filter_by(
             name=cast_data['name'],
             imdb_code=cast_data.get('imdb_code')
         ).first()
-        
-        if not cast:
+
+        if cast:
+            return cast
+
+        # Try to create new one with savepoint
+        savepoint = session.begin_nested()
+        try:
             cast = Cast(
                 name=cast_data['name'],
                 imdb_code=cast_data.get('imdb_code'),
@@ -88,7 +113,20 @@ class DatabaseManager:
             )
             session.add(cast)
             session.flush()
-        return cast
+            savepoint.commit()
+            return cast
+        except IntegrityError:
+            # If unique constraint violation, another process created it
+            # Rollback only to savepoint, not the whole transaction
+            savepoint.rollback()
+            cast = session.query(Cast).filter_by(
+                name=cast_data['name'],
+                imdb_code=cast_data.get('imdb_code')
+            ).first()
+            if cast:
+                return cast
+            # If still not found, re-raise the error
+            raise
     
     def save_movie(self, movie_data):
         """

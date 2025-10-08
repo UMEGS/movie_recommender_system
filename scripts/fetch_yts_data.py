@@ -79,18 +79,23 @@ def process_movie_batch(movie_ids_batch):
     Process a batch of movie IDs - fetch details and save to DB using ORM
     Each process creates its own database manager instance
     """
+    import os
+    process_name = f"Worker-{os.getpid()}"
     results = {'success': 0, 'failed': 0, 'skipped': 0}
 
     # Create database manager for this process
     db_manager = get_db_manager(pool_size=2, max_overflow=5)
 
     try:
-        for movie_id in movie_ids_batch:
+        batch_size = len(movie_ids_batch)
+        logger.info(f"{process_name}: Processing batch of {batch_size} movies (IDs: {movie_ids_batch[0]}-{movie_ids_batch[-1]})")
+
+        for idx, movie_id in enumerate(movie_ids_batch, 1):
             try:
                 # Check if movie already exists (skip if it does)
                 if db_manager.movie_exists(movie_id):
                     results['skipped'] += 1
-                    logger.debug(f"Movie {movie_id} already exists, skipping...")
+                    logger.debug(f"{process_name}: Movie {movie_id} already exists, skipping...")
                     continue
 
                 # Fetch detailed movie data
@@ -105,18 +110,22 @@ def process_movie_batch(movie_ids_batch):
                             results['skipped'] += 1
                         else:
                             results['success'] += 1
+                            logger.info(f"{process_name}: ✓ Saved movie {movie_id}: {movie_data.get('title', 'Unknown')} ({idx}/{batch_size})")
                     else:
                         results['failed'] += 1
-                        logger.error(f"Failed to save movie {movie_id}: {message}")
+                        logger.error(f"{process_name}: Failed to save movie {movie_id}: {message}")
                 else:
                     results['failed'] += 1
+                    logger.warning(f"{process_name}: No data returned for movie {movie_id}")
 
                 # Small delay to avoid rate limiting
                 time.sleep(0.1)
 
             except Exception as e:
-                logger.error(f"Error processing movie {movie_id}: {e}")
+                logger.error(f"{process_name}: Error processing movie {movie_id}: {e}")
                 results['failed'] += 1
+
+        logger.info(f"{process_name}: Batch complete - Success: {results['success']}, Skipped: {results['skipped']}, Failed: {results['failed']}")
 
     finally:
         # Clean up database connections for this process
@@ -140,45 +149,76 @@ def get_total_movie_count():
         return 0
 
 
-def collect_all_movie_ids(max_pages=None):
-    """Collect all movie IDs from the list API"""
+def fetch_page_ids(page, limit=50):
+    """Fetch movie IDs from a single page"""
+    try:
+        data = fetch_movie_list(page=page, limit=limit)
+        if data and data.get('movies'):
+            return [movie['id'] for movie in data['movies']]
+        return []
+    except Exception as e:
+        logger.error(f"Error fetching page {page}: {e}")
+        return []
+
+
+def collect_all_movie_ids(max_pages=None, parallel_pages=10):
+    """
+    Collect all movie IDs from the list API using parallel requests
+
+    Args:
+        max_pages: Maximum number of pages to fetch (None = all)
+        parallel_pages: Number of pages to fetch in parallel (default: 10)
+    """
     logger.info("Collecting all movie IDs from YTS API...")
 
-    all_movie_ids = []
-    page = 1
     limit = 50
 
     # Get total count
     total_count = get_total_movie_count()
-    logger.info(f"Total movies available: {total_count}")
+    logger.info(f"Total movies available: {total_count:,}")
 
     if max_pages:
         total_pages = max_pages
     else:
         total_pages = (total_count // limit) + 1
 
-    with tqdm(total=total_pages, desc="Collecting movie IDs") as pbar:
-        while True:
-            if max_pages and page > max_pages:
-                break
+    logger.info(f"Fetching {total_pages} pages with {parallel_pages} parallel requests...")
 
-            data = fetch_movie_list(page=page, limit=limit)
+    all_movie_ids = []
 
-            if not data or not data.get('movies'):
-                break
+    # Create list of all page numbers to fetch
+    pages_to_fetch = list(range(1, total_pages + 1))
 
-            for movie in data['movies']:
-                all_movie_ids.append(movie['id'])
+    # Fetch pages in parallel batches
+    with tqdm(total=len(pages_to_fetch), desc="Collecting movie IDs") as pbar:
+        from concurrent.futures import ThreadPoolExecutor
 
-            pbar.update(1)
-            page += 1
-            time.sleep(0.2)  # Rate limiting
+        with ThreadPoolExecutor(max_workers=parallel_pages) as executor:
+            # Submit all pages
+            future_to_page = {
+                executor.submit(fetch_page_ids, page, limit): page
+                for page in pages_to_fetch
+            }
 
-    logger.info(f"Collected {len(all_movie_ids)} movie IDs")
+            # Collect results as they complete
+            for future in as_completed(future_to_page):
+                page = future_to_page[future]
+                try:
+                    movie_ids = future.result()
+                    all_movie_ids.extend(movie_ids)
+                    pbar.update(1)
+                except Exception as e:
+                    logger.error(f"Error processing page {page}: {e}")
+                    pbar.update(1)
+
+    # Sort by ID to maintain order
+    all_movie_ids.sort()
+
+    logger.info(f"Collected {len(all_movie_ids):,} movie IDs")
     return all_movie_ids
 
 
-def main(max_pages=None, batch_size=50, max_workers=None):
+def main(max_pages=None, batch_size=20, max_workers=None, parallel_pages=20):
     """
     Main function to fetch and store movie data
 
@@ -186,6 +226,7 @@ def main(max_pages=None, batch_size=50, max_workers=None):
         max_pages: Maximum number of pages to fetch from list API (None = all)
         batch_size: Number of movies to process in each batch
         max_workers: Number of parallel workers (None = cpu_count * 2)
+        parallel_pages: Number of pages to fetch in parallel during ID collection (default: 20)
     """
     start_time = time.time()
 
@@ -193,8 +234,8 @@ def main(max_pages=None, batch_size=50, max_workers=None):
     logger.info("YTS Movie Data Fetcher Started")
     logger.info("=" * 60)
 
-    # Collect all movie IDs
-    movie_ids = collect_all_movie_ids(max_pages=max_pages)
+    # Collect all movie IDs (now in parallel!)
+    movie_ids = collect_all_movie_ids(max_pages=max_pages, parallel_pages=parallel_pages)
 
     if not movie_ids:
         logger.error("No movie IDs collected. Exiting.")
@@ -203,20 +244,26 @@ def main(max_pages=None, batch_size=50, max_workers=None):
     # Split into batches
     batches = [movie_ids[i:i + batch_size] for i in range(0, len(movie_ids), batch_size)]
 
-    logger.info(f"Processing {len(movie_ids)} movies in {len(batches)} batches")
+    logger.info(f"Processing {len(movie_ids):,} movies in {len(batches)} batches (batch size: {batch_size})")
 
     # Determine number of workers
     if max_workers is None:
         max_workers = min(cpu_count() * 2, len(batches))
 
     logger.info(f"Using {max_workers} parallel workers")
+    logger.info(f"Estimated time: {(len(movie_ids) * 0.15 / max_workers / 60):.1f} minutes")
 
     # Process batches in parallel
     total_success = 0
     total_failed = 0
     total_skipped = 0
 
-    with tqdm(total=len(batches), desc="Processing batches") as pbar:
+    print("\n" + "=" * 60)
+    print("Starting movie data fetching...")
+    print("Watch the logs above for real-time progress from each worker")
+    print("=" * 60 + "\n")
+
+    with tqdm(total=len(batches), desc="Processing batches", unit="batch") as pbar:
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(process_movie_batch, batch): batch for batch in batches}
 
@@ -256,15 +303,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Fetch YTS movie data and store in database')
     parser.add_argument('--max-pages', type=int, default=None,
                        help='Maximum number of pages to fetch (default: all)')
-    parser.add_argument('--batch-size', type=int, default=50,
-                       help='Number of movies per batch (default: 50)')
+    parser.add_argument('--batch-size', type=int, default=20,
+                       help='Number of movies per batch - smaller = more frequent updates (default: 20)')
     parser.add_argument('--workers', type=int, default=None,
                        help='Number of parallel workers (default: cpu_count * 2)')
+    parser.add_argument('--parallel-pages', type=int, default=20,
+                       help='Number of pages to fetch in parallel during ID collection (default: 20)')
 
     args = parser.parse_args()
 
     main(
         max_pages=args.max_pages,
         batch_size=args.batch_size,
-        max_workers=args.workers
+        max_workers=args.workers,
+        parallel_pages=args.parallel_pages
     )
