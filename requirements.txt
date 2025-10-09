@@ -9,4 +9,5 @@ tqdm
 fastapi
 uvicorn[standard]
 pydantic
+aiohttp
 
